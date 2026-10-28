@@ -1,9 +1,9 @@
 name: Build
 
+# Manual for now: macOS runners on private repos use paid Actions minutes.
+# Switch back to `push`/`pull_request` triggers once billing is set up.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
