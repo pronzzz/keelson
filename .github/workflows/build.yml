@@ -1,0 +1,20 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app bundle
+        run: ./scripts/build-app.sh
+      - name: Package
+        run: cd build && ditto -c -k --keepParent Keelson.app Keelson.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Keelson
+          path: build/Keelson.zip
