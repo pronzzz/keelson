@@ -24,8 +24,12 @@ only to understand how a VM app is put together on Apple silicon (see *How it wa
 
 ## Download
 
-Get `Keelson.zip` from the latest [release](../../releases/latest), unzip, and move `Keelson.app` to
-`/Applications`. The app is signed locally rather than notarized, so the first time, right-click it
+Get **`Keelson-1.0.0.dmg`** from the latest [release](../../releases/latest), open it, and drag
+Keelson into Applications. (`Keelson.zip` has the same app if you prefer.)
+
+<p align="center"><img src="docs/dmg.png" width="560" alt="Keelson installer window"></p>
+
+The app is signed locally rather than notarized, so the first time, right-click it in Applications
 and choose **Open**, or run:
 
 ```bash
@@ -40,6 +44,15 @@ xattr -dr com.apple.quarantine /Applications/Keelson.app
 
 This produces `build/Keelson.app`, signed locally. Copy it to `/Applications` if you like.
 Requires Xcode (Swift 5.10+) and macOS 14 or later.
+
+To package the drag-to-install disk image (`build/Keelson-<version>.dmg`):
+
+```bash
+./scripts/build-dmg.sh
+```
+
+It uses [`create-dmg`](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`) for the
+styled window, and falls back to a plain `hdiutil` image without it. Pass `--build` to build the app first.
 
 Check that virtualization works on your Mac:
 

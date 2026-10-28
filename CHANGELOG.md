@@ -17,3 +17,4 @@ First release.
   The boot disk and drives holding VM files are never offered.
 - Library window, new-VM wizard, per-VM settings, pause/resume, graceful shutdown and force power off.
 - `--selftest` command that boots a throwaway VM to confirm virtualization works on the Mac.
+- Drag-to-install DMG (`Keelson-1.0.0.dmg`) alongside the zip, built by `scripts/build-dmg.sh`.
