@@ -11,79 +11,81 @@
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
-Built and tested on an M4 Mac mini. Keelson runs **Linux** and **Windows 11 for ARM**, and you can
-put VMs on your **external SSDs**: either as a VM file on the drive, or by giving a VM an entire SSD
-so the OS installs directly onto it.
-
-Keelson is an original app. It isn't derived from Parallels code. Parallels Desktop was examined
-only to understand how a VM app is put together on Apple silicon (see *How it was designed*).
+<p align="center"><a href="../../releases/latest"><b>⬇ Download Keelson for Mac (.dmg)</b></a></p>
 
 | Library | New VM |
 | --- | --- |
 | ![Library](docs/library.png) | ![New VM](docs/new-vm.png) |
 
-## Download
+## What it does
 
-Get **`Keelson-1.0.0.dmg`** from the latest [release](../../releases/latest), open it, and drag
-Keelson into Applications. (`Keelson.zip` has the same app if you prefer.)
+- **Linux (ARM64)** on Apple's built-in Virtualization framework, with nothing extra to install. It boots any
+  ARM64 installer ISO and supports automatic display resizing, clipboard sharing, shared folders and
+  **Rosetta** for x86-64 Linux programs.
+- **Windows 11 (ARM64)** through QEMU on Apple's Hypervisor framework (near-native CPU speed), with
+  the TPM 2.0 chip Windows 11 requires.
+- **External SSDs.** Keep VM files on any drive, or give a VM an **entire SSD** so the guest OS installs
+  directly onto it and boots from it.
+- Library window, new-VM wizard, per-VM settings, pause/resume, shutdown and force power off.
 
-<p align="center"><img src="docs/dmg.png" width="560" alt="Keelson installer window"></p>
+Built and tested on an M4 Mac mini. Keelson is an original app. Parallels Desktop was examined only
+to understand how a VM app is put together on Apple silicon (see [How it was designed](#how-it-was-designed)).
 
-The app is signed locally rather than notarized, so the first time, right-click it in Applications
-and choose **Open**, or run:
+## Install
+
+**Requires** macOS 14 or later on an Apple silicon Mac (M1–M4).
+
+1. Download **`Keelson-<version>.dmg`** from the [latest release](../../releases/latest).
+2. Open it and drag **Keelson** into **Applications**.
+
+   <img src="docs/dmg.png" width="520" alt="Keelson installer window">
+
+3. Eject the *Keelson* disk image.
+4. **First launch:** Keelson is signed locally rather than notarized by Apple, so macOS blocks a
+   normal double-click the first time. Right-click Keelson in Applications and choose **Open**, then
+   **Open** again. After that it opens normally. Alternatively, run:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Keelson.app
+   ```
+
+5. **Windows guests only:** install QEMU and the TPM emulator with [Homebrew](https://brew.sh):
+
+   ```bash
+   brew install qemu swtpm
+   ```
+
+   Keelson finds them automatically. You can set a custom QEMU path in **Keelson ▸ Settings**.
+
+`Keelson.zip` on the release page contains the same app if you'd rather not use the disk image.
+
+To check that virtualization works on your Mac, run the built-in self-test. It boots a throwaway VM
+and deletes it afterwards:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Keelson.app
+/Applications/Keelson.app/Contents/MacOS/Keelson --selftest
 ```
 
-## Build
+## Create your first VM
 
-```bash
-./scripts/build-app.sh
-```
-
-This produces `build/Keelson.app`, signed locally. Copy it to `/Applications` if you like.
-Requires Xcode (Swift 5.10+) and macOS 14 or later.
-
-To package the drag-to-install disk image (`build/Keelson-<version>.dmg`):
-
-```bash
-./scripts/build-dmg.sh
-```
-
-It uses [`create-dmg`](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`) for the
-styled window, and falls back to a plain `hdiutil` image without it. Pass `--build` to build the app first.
-
-Check that virtualization works on your Mac:
-
-```bash
-build/Keelson.app/Contents/MacOS/Keelson --selftest
-```
-
-## Windows needs QEMU
-
-Linux runs on Apple's built-in Virtualization framework with nothing to install. Windows 11 needs
-a TPM 2.0 chip, NVMe storage and a basic UEFI display, which Apple's framework doesn't provide, so
-Keelson runs Windows through QEMU on Apple's Hypervisor framework (near-native CPU speed).
-
-```bash
-brew install qemu swtpm
-```
-
-`swtpm` provides the TPM. Keelson finds both automatically. You can set a custom path in Keelson ▸ Settings.
+1. Click **New VM** (or press ⌘N).
+2. Pick **Linux** or **Windows 11**. Keelson chooses the right engine and suggests CPU, memory and disk sizes.
+3. Choose the installer ISO.
+4. Under **Storage**, pick where the VM lives (see below), then click **Create**.
+5. Select the VM and click **Start**, then install the OS as you would on a real PC.
 
 ## Using external SSDs
 
-**Option 1 – VM file on the SSD (recommended).** In *New VM ▸ Storage ▸ Virtual disk file*, click
+**Option 1: VM file on the SSD (recommended).** In *New VM ▸ Storage ▸ Virtual disk file*, click
 the SSD's name under *External drives* (or *Choose…*). The VM folder (`Name.keelsonvm`) lives on the
-SSD. Format the SSD as **APFS** so disk files stay sparse (they only use the space the guest has
-actually written). If the SSD is unplugged, the VM shows under *Offline* and comes back when you
+SSD. Format the SSD as **APFS** so disk files stay sparse, meaning they only use the space the guest has
+actually written. If the SSD is unplugged, the VM shows under *Offline* and comes back when you
 reconnect it.
 
-**Option 2 – Entire SSD.** Choose *Entire external SSD*, pick the disk, type `ERASE`. The guest
+**Option 2: Entire SSD.** Choose *Entire external SSD*, pick the disk, and type `ERASE`. The guest
 installer partitions the SSD and the OS boots from it. When you start the VM:
 
-1. Keelson finds the SSD by model and size (its `diskN` number can change between plug-ins).
+1. Keelson finds the SSD by model and size, because its `diskN` number can change between plug-ins.
 2. It unmounts the SSD's volumes and stops macOS from re-mounting them while the VM runs.
 3. macOS asks for your administrator password (`authopen`) to grant raw access to that one disk.
    Keelson itself never runs as root.
@@ -102,8 +104,10 @@ Create the VM, pick the ISO, Start, and install as normal. Afterwards, remove th
 
 ## Installing Windows 11
 
+Needs `brew install qemu swtpm` (see [Install](#install)).
+
 1. Get the **Windows 11 Arm64** ISO from Microsoft's download page.
-2. New VM ▸ Windows 11 ▸ engine *QEMU + Hypervisor* ▸ pick the ISO. Give it at least 4 CPU cores, 8 GB memory, 64 GB disk.
+2. New VM ▸ Windows 11 ▸ engine *QEMU + Hypervisor* ▸ pick the ISO. Give it at least 4 CPU cores, 8 GB memory and a 64 GB disk.
 3. Start. A QEMU window opens. When it says *Press any key to boot from CD or DVD*, click in the window and press a key.
 4. Networking during setup: Windows has no built-in driver for the virtual network card. Either
    - attach the [virtio-win](https://github.com/virtio-win/virtio-win-pkg-scripts) ISO as the *Drivers ISO* and load the `NetKVM\w11\ARM64` driver, or
@@ -114,7 +118,7 @@ Create the VM, pick the ISO, Start, and install as normal. Afterwards, remove th
    reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1
    ```
 
-Windows's display is a basic framebuffer: good for desktop use, no 3D acceleration.
+Windows uses a basic framebuffer display. It's fine for desktop use but has no 3D acceleration.
 
 ## Known limits
 
@@ -125,6 +129,38 @@ Windows's display is a basic framebuffer: good for desktop use, no 3D accelerati
 | Snapshots, disk resizing | Not implemented yet. |
 | x86-64 Windows/Linux guests | Not supported. ARM64 guests only; x86 *apps* run inside them through Windows' built-in emulation or Rosetta for Linux. |
 | macOS guests | Not implemented (the Apple engine supports them; it's a natural next feature). |
+| Notarization | Not notarized, so the first launch needs right-click ▸ Open (see [Install](#install)). |
+
+## Building from source
+
+Requires Xcode (Swift 5.10+) and macOS 14 or later.
+
+```bash
+./scripts/build-app.sh
+```
+
+This builds `build/Keelson.app` and signs it locally. To sign with a Developer ID instead, set
+`SIGN_IDENTITY="Developer ID Application: …"`.
+
+To package the drag-to-install disk image `build/Keelson-<version>.dmg`:
+
+```bash
+./scripts/build-dmg.sh
+```
+
+Add `--build` to build the app first. The styled installer window needs
+[`create-dmg`](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`); without it the
+script makes a plain disk image with `hdiutil`. The window background is drawn by
+`scripts/dmg-background.swift`.
+
+### Releasing
+
+1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Resources/Info.plist`, and add a `CHANGELOG.md` entry.
+2. `./scripts/build-dmg.sh --build`, then `build/Keelson.app/Contents/MacOS/Keelson --selftest`.
+3. `ditto -c -k --keepParent build/Keelson.app build/Keelson.zip`.
+4. Create a GitHub release with the tag `v<version>` and attach the DMG and zip, with their SHA-256 sums in the notes.
+
+The GitHub Actions workflow (`.github/workflows/build.yml`) can also build the app, but it only runs when started manually.
 
 ## How it was designed
 
@@ -148,4 +184,14 @@ Sources/Keelson/
   Engine/                   AppleRunner (Virtualization.framework), QEMURunner + QMP, Spawner
   Disk/                     DiskScanner (diskutil), RawDiskAccess (authopen), MountBlocker
   UI/                       library, VM detail, new-VM wizard, settings, VM display window
+Resources/                  Info.plist, entitlements, app icon
+scripts/
+  build-app.sh              build and sign Keelson.app
+  build-dmg.sh              package the drag-to-install DMG
+  dmg-background.swift      draws the DMG window background
+docs/                       README images
 ```
+
+## License
+
+[MIT](LICENSE) © 2026 Pranav Dwivedi
