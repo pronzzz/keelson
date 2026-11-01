@@ -15,7 +15,8 @@ final class DownloadManager: NSObject, ObservableObject {
         case failed(String)
     }
 
-    final class Job: ObservableObject, Identifiable {
+    /// Only touched on the main actor; marked Sendable so progress callbacks can hop back to it.
+    final class Job: ObservableObject, Identifiable, @unchecked Sendable {
         let item: InstallerItem
         let destination: URL
         @Published fileprivate(set) var phase: Phase
