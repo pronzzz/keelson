@@ -49,14 +49,19 @@ final class QEMURunner: VMRunner {
     private let bundle: VMBundle
     private let rawFD: Int32?
     private let tools: QEMUToolchain.Paths
+    /// No window or audio; used by --selftest.
+    private let headless: Bool
     private let qmpPath: String
     private let tpmSocket: String
+    private let tpmPIDFile: String
+    private var setupMedia: URL?
     private var pid: pid_t = 0
     private var tpmPID: pid_t = 0
     private var exitSource: DispatchSourceProcess?
+    private var keyTask: Task<Void, Never>?
     private var stopping = false
 
-    init(config: VMConfig, bundle: VMBundle, rawFD: Int32?) throws {
+    init(config: VMConfig, bundle: VMBundle, rawFD: Int32?, headless: Bool = false) throws {
         guard let tools = QEMUToolchain.find() else {
             throw KeelsonError("QEMU isn't installed. Windows VMs need it. Install with: \(QEMUToolchain.installHint)")
         }
@@ -64,25 +69,49 @@ final class QEMURunner: VMRunner {
         self.bundle = bundle
         self.rawFD = rawFD
         self.tools = tools
-        // Unix socket paths are limited to 104 bytes, so keep them in the temp dir, not the bundle.
+        self.headless = headless
+        // Unix socket paths are limited to 104 bytes, so keep them in a short temp dir, not the bundle.
         let short = config.id.uuidString.prefix(8)
-        qmpPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("keelson-\(short).qmp")
-        tpmSocket = (NSTemporaryDirectory() as NSString).appendingPathComponent("keelson-\(short).tpm")
+        var dir = NSTemporaryDirectory()
+        if dir.utf8.count > 70 { dir = "/tmp" }
+        qmpPath = (dir as NSString).appendingPathComponent("keelson-\(short).qmp")
+        tpmSocket = (dir as NSString).appendingPathComponent("keelson-\(short).tpm")
+        tpmPIDFile = (dir as NSString).appendingPathComponent("keelson-\(short).tpm.pid")
+    }
+
+    deinit {
+        keyTask?.cancel()
     }
 
     func start() async throws {
+        do {
+            try await launch()
+        } catch {
+            // Don't leave swtpm behind: it holds a lock on the TPM state and would block the next start.
+            if pid > 0, kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+            cleanup()
+            throw error
+        }
+    }
+
+    private func launch() async throws {
         let fm = FileManager.default
         if !fm.fileExists(atPath: bundle.qemuEFIVarsURL.path) {
             try fm.copyItem(atPath: tools.firmwareVarsTemplate, toPath: bundle.qemuEFIVarsURL.path)
         }
         try? fm.removeItem(atPath: qmpPath)
+        if config.usesWindowsSetupHelpers {
+            setupMedia = try WindowsSetupMedia.ensure(in: bundle)
+        }
 
         if config.guest == .windows, let swtpm = tools.swtpm {
             try fm.createDirectory(at: bundle.tpmDirURL, withIntermediateDirectories: true)
+            Self.killStaleTPM(pidFile: tpmPIDFile)
             try? fm.removeItem(atPath: tpmSocket)
             tpmPID = try Spawner.spawn(swtpm, ["socket", "--tpm2",
                                                "--tpmstate", "dir=\(bundle.tpmDirURL.path)",
                                                "--ctrl", "type=unixio,path=\(tpmSocket)",
+                                               "--pid", "file=\(tpmPIDFile)",
                                                "--terminate"], logURL: bundle.logURL)
             for _ in 0..<50 where !fm.fileExists(atPath: tpmSocket) {
                 try await Task.sleep(nanoseconds: 100_000_000)
@@ -90,6 +119,7 @@ final class QEMURunner: VMRunner {
             guard fm.fileExists(atPath: tpmSocket) else { throw KeelsonError("The TPM emulator (swtpm) didn't start. See keelson.log in the VM folder.") }
         }
 
+        let blankDisk = config.guest == .windows && config.installerISO != nil && mainDiskIsBlank()
         let args = try arguments()
         bundle.log("Starting QEMU: \(tools.qemu) \(args.joined(separator: " "))")
         pid = try Spawner.spawn(tools.qemu, args, logURL: bundle.logURL,
@@ -111,9 +141,61 @@ final class QEMURunner: VMRunner {
 
         // QEMU exits within a second if the arguments are bad; surface that as a start failure.
         try await Task.sleep(nanoseconds: 1_200_000_000)
-        if kill(pid, 0) != 0 {
+        if kill(pid, 0) != 0 || exitSource?.isCancelled == true {
             throw KeelsonError("QEMU failed to start. Last log lines:\n" + tailOfLog())
         }
+
+        // Windows' installer only boots from the ISO if a key is pressed within a few seconds of
+        // "Press any key to boot from CD or DVD", otherwise the VM drops into the UEFI shell.
+        // On a blank disk there's nothing else to boot, so press it for the user.
+        if blankDisk { pressKeyForInstaller() }
+    }
+
+    private func pressKeyForInstaller() {
+        let qmp = qmpPath
+        let bundle = bundle
+        bundle.log("Blank disk with an installer attached: pressing Enter for “Press any key to boot from CD”")
+        keyTask = Task.detached(priority: .utility) {
+            // Firmware reaches the prompt in about 3–8 s; it waits 5 s. Stop well before Setup's first page.
+            for _ in 0..<36 {
+                if Task.isCancelled { return }
+                try? QMP.sendKey(qmp, "ret")
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
+    }
+
+    /// True when the main disk has neither an MBR signature nor a GPT header, i.e. no OS installed yet.
+    func mainDiskIsBlank() -> Bool {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let n: Int
+        if let rawFD {
+            n = buffer.withUnsafeMutableBytes { pread(rawFD, $0.baseAddress, 4096, 0) }
+        } else if let url = bundle.diskURL(for: config), let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            let data = (try? handle.read(upToCount: 4096)) ?? Data()
+            buffer.replaceSubrange(0..<data.count, with: data)
+            n = data.count
+        } else {
+            return false
+        }
+        guard n >= 520 else { return n >= 0 }
+        let mbr = buffer[510] == 0x55 && buffer[511] == 0xAA
+        let gpt = Array(buffer[512..<520]) == Array("EFI PART".utf8)
+        return !mbr && !gpt
+    }
+
+    private static func killStaleTPM(pidFile: String) {
+        guard let text = try? String(contentsOfFile: pidFile, encoding: .utf8),
+              let stale = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), stale > 0 else { return }
+        // Only kill it if it's really a leftover swtpm, not an unrelated process that reused the PID.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        if proc_pidpath(stale, &buffer, UInt32(buffer.count)) > 0,
+           String(cString: buffer).hasSuffix("/swtpm") {
+            kill(stale, SIGTERM)
+            usleep(200_000)
+        }
+        try? FileManager.default.removeItem(atPath: pidFile)
     }
 
     func requestStop() async throws {
@@ -130,9 +212,12 @@ final class QEMURunner: VMRunner {
     func resume() async throws { try await QMP.execute(qmpPath, "cont") }
 
     private func cleanup() {
+        keyTask?.cancel()
+        keyTask = nil
         if tpmPID > 0 { kill(tpmPID, SIGTERM); var s: Int32 = 0; waitpid(tpmPID, &s, 0); tpmPID = 0 }
         try? FileManager.default.removeItem(atPath: qmpPath)
         try? FileManager.default.removeItem(atPath: tpmSocket)
+        try? FileManager.default.removeItem(atPath: tpmPIDFile)
     }
 
     private func tailOfLog() -> String {
@@ -154,13 +239,16 @@ final class QEMURunner: VMRunner {
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-kbd,bus=xhci.0",
             "-device", "usb-tablet,bus=xhci.0",
-            "-display", "cocoa,zoom-to-fit=on",
             "-qmp", "unix:\(qmpPath),server=on,wait=off",
-            "-audiodev", "coreaudio,id=snd0",
-            "-device", "usb-audio,audiodev=snd0,bus=xhci.0",
             "-netdev", "user,id=net0",
             "-device", "virtio-net-pci,netdev=net0,mac=\(config.macAddress)",
         ]
+
+        a += headless
+            ? ["-display", "none"]
+            : ["-display", "cocoa,zoom-to-fit=on",
+               "-audiodev", "coreaudio,id=snd0",
+               "-device", "usb-audio,audiodev=snd0,bus=xhci.0"]
 
         // Display: ramfb is a plain UEFI framebuffer every OS can drive with no extra drivers.
         a += windows ? ["-device", "ramfb"] : ["-device", "virtio-gpu-pci"]
@@ -176,19 +264,25 @@ final class QEMURunner: VMRunner {
         } else {
             throw KeelsonError("This VM has no disk configured.")
         }
-        a += ["-device", blockDevice]
+        // Fixed boot order: the installer first (while attached), then the disk.
+        a += ["-device", blockDevice + ",bootindex=1"]
 
         // Installer and driver ISOs as USB drives (Windows Setup reads these without extra drivers).
-        for (index, iso) in [config.installerISO, config.driversISO].compactMap({ $0 }).enumerated() {
+        var images = [config.installerISO, config.driversISO].compactMap { $0 }
+        if let setupMedia { images.append(setupMedia.path) }
+        for (index, iso) in images.enumerated() {
             guard FileManager.default.fileExists(atPath: iso) else { throw KeelsonError("Installer image not found: \(iso)") }
+            let boot = index == 0 && iso == config.installerISO ? ",bootindex=0" : ""
             a += ["-drive", "if=none,id=cd\(index),media=cdrom,readonly=on,file=\(iso)",
-                  "-device", "usb-storage,drive=cd\(index),removable=on,bus=xhci.0"]
+                  "-device", "usb-storage,drive=cd\(index),removable=on,bus=xhci.0\(boot)"]
         }
 
         if windows && tools.swtpm != nil {
+            // ppi=off: the TPM's Physical Presence page is a 1 KB RAM region, and Apple's Hypervisor
+            // only maps 16 KB-aligned memory, so with PPI on QEMU dies at start with HV_BAD_ARGUMENT.
             a += ["-chardev", "socket,id=chrtpm,path=\(tpmSocket)",
                   "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
-                  "-device", "tpm-tis-device,tpmdev=tpm0"]
+                  "-device", "tpm-tis-device,tpmdev=tpm0,ppi=off"]
         }
 
         // Shared folders: QEMU's built-in SMB server isn't on macOS builds, so use 9p for Linux.
@@ -205,11 +299,16 @@ final class QEMURunner: VMRunner {
 enum QMP {
     static func execute(_ socketPath: String, _ command: String) async throws {
         try await Task.detached(priority: .userInitiated) {
-            try send(socketPath, command)
+            try send(socketPath, #"{"execute":"\#(command)"}"#)
         }.value
     }
 
-    private static func send(_ path: String, _ command: String) throws {
+    /// Presses and releases one key (a QEMU "qcode" such as "ret" or "spc").
+    static func sendKey(_ socketPath: String, _ qcode: String) throws {
+        try send(socketPath, #"{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"\#(qcode)"}]}}"#)
+    }
+
+    private static func send(_ path: String, _ json: String) throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw KeelsonError("socket() failed") }
         defer { close(fd) }
@@ -234,7 +333,7 @@ enum QMP {
         _ = readLine(fd)                          // greeting
         write(fd, #"{"execute":"qmp_capabilities"}"#)
         _ = readLine(fd)
-        write(fd, #"{"execute":"\#(command)"}"#)
+        write(fd, json)
         _ = readLine(fd)
     }
 

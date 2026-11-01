@@ -54,6 +54,11 @@ final class VMInstance: ObservableObject, Identifiable {
         bundle.log("Start requested (\(config.engine.rawValue))")
         var rawFD: Int32?
         do {
+            for path in [config.installerISO, config.driversISO] {
+                if let job = DownloadManager.shared.activeJob(forPath: path) {
+                    throw KeelsonError("\(job.item.title) is still downloading. \(job.statusText) Start the VM when it's done.")
+                }
+            }
             if case .physical(let ref) = config.disk {
                 let disk = try DiskScanner.resolve(ref)
                 if disk.bsdName != ref.bsdName {

@@ -6,6 +6,7 @@ struct LibraryView: View {
     @State private var selection: URL?
     @State private var showingNew = false
     @State private var importing = false
+    @State private var showingInstallers = false
     @State private var alert: String?
 
     var body: some View {
@@ -33,6 +34,8 @@ struct LibraryView: View {
                 HStack {
                     Button { showingNew = true } label: { Label("New VM", systemImage: "plus") }
                     Spacer()
+                    Button { showingInstallers = true } label: { Image(systemName: "opticaldisc") }
+                        .help("Download installers (Ubuntu, Windows 11, drivers)")
                     Button { importing = true } label: { Image(systemName: "square.and.arrow.down") }
                         .help("Add an existing .keelsonvm bundle")
                 }
@@ -60,10 +63,16 @@ struct LibraryView: View {
             Button("OK") {}
         } message: { Text(alert ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .keelsonNewVM)) { _ in showingNew = true }
+        .onReceive(NotificationCenter.default.publisher(for: .keelsonInstallers)) { _ in showingInstallers = true }
+        .sheet(isPresented: $showingInstallers) { InstallersView() }
         .onAppear {
             if selection == nil { selection = library.machines.first?.bundle.url }
             // `open Keelson.app --args --new-vm` jumps straight into the wizard.
             if CommandLine.arguments.contains("--new-vm") { showingNew = true }
+            // `--installers` opens the download sheet; `--microsoft-download` also opens Microsoft's page.
+            if CommandLine.arguments.contains("--installers") || CommandLine.arguments.contains("--microsoft-download") {
+                showingInstallers = true
+            }
         }
     }
 }

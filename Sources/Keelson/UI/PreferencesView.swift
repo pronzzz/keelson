@@ -4,6 +4,7 @@ struct PreferencesView: View {
     @AppStorage(VMLibrary.defaultFolderKey) private var defaultFolder = ""
     @AppStorage(QEMUToolchain.overrideKey) private var qemuPath = ""
     @State private var picking = false
+    @ObservedObject private var updater = Updater.shared
 
     var body: some View {
         Form {
@@ -24,6 +25,17 @@ struct PreferencesView: View {
                     QEMUMissingBanner()
                 }
             }
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: Binding(get: { updater.autoCheck }, set: { updater.autoCheck = $0 }))
+                LabeledContent("Version \(AppInfo.version)") {
+                    HStack {
+                        if let last = updater.lastChecked {
+                            Text("Checked \(last.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary)
+                        }
+                        Button("Check Now") { Task { await updater.check(userInitiated: true) } }
+                    }
+                }
+            }
             Section("Rosetta for Linux") {
                 switch VZLinuxRosettaAvailabilityText.current {
                 case .installed: Text("Installed").foregroundStyle(.secondary)
@@ -34,7 +46,7 @@ struct PreferencesView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 380)
+        .frame(width: 540, height: 470)
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { defaultFolder = url.path }
         }

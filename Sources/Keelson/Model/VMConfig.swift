@@ -60,6 +60,14 @@ struct VMConfig: Codable, Hashable, Identifiable {
     var displayHeight = 1200
     var macAddress: String
     var created = Date()
+    /// Windows only: attach Keelson's setup helper disk while the installer is attached. It skips
+    /// Windows 11's TPM/Secure Boot/CPU checks, installs the virtio drivers (network, balloon, input…)
+    /// and lets setup finish without internet. `nil` (VMs made by 1.0) means on.
+    var windowsSetupHelpers: Bool?
+
+    var usesWindowsSetupHelpers: Bool {
+        guest == .windows && installerISO != nil && (windowsSetupHelpers ?? true)
+    }
 
     static func randomMAC() -> String {
         // Locally administered, unicast.
@@ -88,6 +96,7 @@ struct VMBundle: Hashable {
     var machineIDURL: URL { url.appendingPathComponent("machine-id") }
     var tpmDirURL: URL { url.appendingPathComponent("tpm", isDirectory: true) }
     var logURL: URL { url.appendingPathComponent("keelson.log") }
+    var setupMediaURL: URL { url.appendingPathComponent("keelson-setup.iso") }
 
     func diskURL(for config: VMConfig) -> URL? {
         if case .image(let file, _) = config.disk { return url.appendingPathComponent(file) }

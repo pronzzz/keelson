@@ -3,8 +3,14 @@ import SwiftUI
 @main
 enum KeelsonMain {
     static func main() {
-        if CommandLine.arguments.contains("--selftest") {
+        let args = CommandLine.arguments
+        if args.contains("--selftest") {
             SelfTest.run()
+        } else if args.contains("--catalog") || args.contains("--fetch") {
+            SelfTest.runInstallerCommand(args)
+        } else if args.contains("--check-update") {
+            Task { @MainActor in exit(await Updater.shared.dryRun()) }
+            dispatchMain()
         } else {
             KeelsonApp.main()
         }
@@ -26,6 +32,14 @@ struct KeelsonApp: App {
                 Button("New Virtual Machine…") {
                     NotificationCenter.default.post(name: .keelsonNewVM, object: nil)
                 }.keyboardShortcut("n")
+                Button("Download Installers…") {
+                    NotificationCenter.default.post(name: .keelsonInstallers, object: nil)
+                }.keyboardShortcut("d", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task { await Updater.shared.check(userInitiated: true) }
+                }
             }
         }
 
@@ -41,6 +55,10 @@ struct KeelsonApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { Updater.shared.startAutomaticChecks() }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let running = MainActor.assumeIsolated { VMLibrary.shared.machines.filter(\.isActive) }
         guard !running.isEmpty else { return .terminateNow }
@@ -61,4 +79,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let keelsonNewVM = Notification.Name("KeelsonNewVM")
+    static let keelsonInstallers = Notification.Name("KeelsonInstallers")
 }

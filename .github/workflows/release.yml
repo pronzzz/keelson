@@ -1,0 +1,69 @@
+# Builds, signs and publishes a GitHub release. Installed copies of Keelson pick it up through the
+# in-app updater, which only accepts zips signed with the key in KEELSON_UPDATE_PRIVATE_KEY.
+#
+# Runs when a version tag (v1.2.0, …) is pushed, when started by hand for an existing tag,
+# or from the "Bump version" workflow.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v1.1.0"
+        required: true
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Skip if this release is already published
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release built and signed on a Mac with scripts/release.sh --publish needs nothing more.
+          if gh release view "$TAG" -R "${{ github.repository }}" --json assets -q '.assets[].name' 2>/dev/null | grep -q '\.zip\.sig$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG is already published with a signed update; nothing to do."
+          fi
+      - name: Check the signing key is configured
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          KEY: ${{ secrets.KEELSON_UPDATE_PRIVATE_KEY }}
+        run: |
+          test -n "$KEY" || { echo "::error::Add the repository secret KEELSON_UPDATE_PRIVATE_KEY (see README > Releasing)."; exit 1; }
+      - uses: actions/checkout@v4
+        if: steps.existing.outputs.skip != 'true'
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: maxim-lobanov/setup-xcode@v1
+        if: steps.existing.outputs.skip != 'true'
+        with:
+          xcode-version: latest-stable
+      - name: Install tools
+        if: steps.existing.outputs.skip != 'true'
+        run: brew install create-dmg
+      - name: Check the tag matches the app version
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          test "v$version" = "$TAG" || { echo "Tag $TAG does not match Info.plist version $version"; exit 1; }
+      - name: Build, sign and publish
+        if: steps.existing.outputs.skip != 'true'
+        env:
+          KEELSON_UPDATE_PRIVATE_KEY: ${{ secrets.KEELSON_UPDATE_PRIVATE_KEY }}
+          KEELSON_SKIP_SELFTEST: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release.sh --publish

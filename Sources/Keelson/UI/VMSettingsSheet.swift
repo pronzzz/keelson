@@ -50,8 +50,13 @@ struct VMSettingsSheet: View {
                     }
                 }
                 Section("Installer media") {
-                    ISOField(title: "Installer ISO", path: $draft.installerISO)
-                    if draft.guest == .windows { ISOField(title: "Drivers ISO", path: $draft.driversISO) }
+                    ISOField(title: "Installer ISO", path: $draft.installerISO, downloadGuest: draft.guest)
+                    if draft.guest == .windows {
+                        ISOField(title: "Drivers ISO", path: $draft.driversISO, downloadGuest: .windows, downloadRole: .windowsDrivers)
+                        SetupHelpersToggle(isOn: Binding(get: { draft.windowsSetupHelpers ?? true },
+                                                         set: { draft.windowsSetupHelpers = $0 }),
+                                           hasDrivers: draft.driversISO != nil, engine: draft.engine)
+                    }
                     Text("Remove the installer once the OS is installed so the VM boots straight from its disk.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -97,7 +102,7 @@ struct VMSettingsSheet: View {
             }
             .padding()
         }
-        .frame(width: 560, height: 640)
+        .frame(width: 600, height: 640)
     }
 
     private func save() {

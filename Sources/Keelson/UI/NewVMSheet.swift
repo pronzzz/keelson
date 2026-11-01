@@ -20,6 +20,7 @@ struct NewVMSheet: View {
     @State private var cpus = min(4, ProcessInfo.processInfo.activeProcessorCount)
     @State private var memoryGB = 4
     @State private var rosetta = true
+    @State private var setupHelpers = true
     @State private var storage: StorageMode = .file
     @State private var folder = VMLibrary.defaultFolder
     @State private var diskGB = 64
@@ -44,15 +45,20 @@ struct NewVMSheet: View {
                         engine = g.defaultEngine
                         memoryGB = min(g.recommendedMemoryMB / 1024, max(2, hostMemoryGB / 2))
                         diskGB = g.recommendedDiskGB
+                        iso = nil
+                        if g == .windows, driversISO == nil {
+                            driversISO = DownloadManager.shared.localISOs().first(where: DownloadManager.looksLikeVirtio)?.path
+                        }
                     }
                     Picker("Engine", selection: $engine) {
                         Text("Apple Virtualization" + (guest == .windows ? " (experimental)" : " (recommended)")).tag(EngineKind.apple)
                         Text("QEMU + Hypervisor" + (guest == .windows ? " (recommended)" : "")).tag(EngineKind.qemu)
                     }
                     if engine == .qemu && QEMUToolchain.find() == nil { QEMUMissingBanner() }
-                    ISOField(title: "Installer ISO", path: $iso)
+                    ISOField(title: "Installer ISO", path: $iso, downloadGuest: guest)
                     if guest == .windows {
-                        ISOField(title: "Drivers ISO (optional)", path: $driversISO)
+                        ISOField(title: "Drivers ISO", path: $driversISO, downloadGuest: .windows, downloadRole: .windowsDrivers)
+                        SetupHelpersToggle(isOn: $setupHelpers, hasDrivers: driversISO != nil, engine: engine)
                     }
                 }
 
@@ -94,7 +100,7 @@ struct NewVMSheet: View {
             }
             .padding()
         }
-        .frame(width: 600, height: 640)
+        .frame(width: 620, height: 640)
     }
 
     private var canCreate: Bool {
@@ -122,7 +128,8 @@ struct NewVMSheet: View {
                               memoryMB: memoryGB * 1024, disk: disk, installerISO: iso,
                               driversISO: guest == .windows ? driversISO : nil,
                               rosetta: guest == .linux && engine == .apple && rosetta,
-                              macAddress: VMConfig.randomMAC())
+                              macAddress: VMConfig.randomMAC(),
+                              windowsSetupHelpers: guest == .windows ? setupHelpers : nil)
         // A whole-disk VM keeps its small settings bundle in the default library folder.
         let target = storage == .file ? folder : VMLibrary.defaultFolder
         do {
@@ -138,22 +145,60 @@ struct NewVMSheet: View {
 struct ISOField: View {
     let title: String
     @Binding var path: String?
+    /// Shows a Download… button offering installers for this guest.
+    var downloadGuest: GuestOS?
+    var downloadRole: InstallerItem.Role = .installer
     @State private var picking = false
+    @State private var downloading = false
+    @ObservedObject private var downloads = DownloadManager.shared
 
     var body: some View {
         LabeledContent(title) {
-            HStack {
-                Text(path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
-                    .foregroundStyle(path == nil ? .secondary : .primary)
-                    .lineLimit(1).truncationMode(.middle)
-                Button("Choose…") { picking = true }
-                if path != nil { Button("Remove") { path = nil } }
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack {
+                    Text(path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                        .foregroundStyle(path == nil ? .secondary : .primary)
+                        .lineLimit(1).truncationMode(.middle)
+                    if downloadGuest != nil { Button("Download…") { downloading = true } }
+                    Button("Choose…") { picking = true }
+                    if path != nil { Button("Remove") { path = nil } }
+                }
+                if let job = downloads.activeJob(forPath: path) {
+                    JobProgress(job: job).frame(maxWidth: 360, alignment: .trailing)
+                }
             }
+        }
+        .sheet(isPresented: $downloading) {
+            InstallersView(guest: downloadGuest, role: downloadRole) { url in path = url.path }
         }
         .fileImporter(isPresented: $picking,
                       allowedContentTypes: [UTType(filenameExtension: "iso") ?? .diskImage, .diskImage, .data]) { result in
             if case .success(let url) = result { path = url.path }
         }
+    }
+}
+
+struct SetupHelpersToggle: View {
+    @Binding var isOn: Bool
+    var hasDrivers: Bool
+    var engine: EngineKind
+
+    var body: some View {
+        if engine == .qemu {
+            Toggle("Setup helpers", isOn: $isOn)
+            Text(caption)
+                .font(.caption).foregroundStyle(isOn && !hasDrivers ? .orange : .secondary)
+        }
+    }
+
+    private var caption: String {
+        guard isOn else {
+            return "Windows Setup runs unmodified. You'll need to press a key at “Press any key to boot from CD” and load drivers yourself."
+        }
+        let drivers = hasDrivers
+            ? ", and installs the virtio drivers so networking works during setup."
+            : ". Add the virtio-win drivers ISO to get networking during setup."
+        return "Skips Windows 11's TPM and Secure Boot checks, presses the “boot from CD” key for you, allows a local account without internet" + drivers
     }
 }
 

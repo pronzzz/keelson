@@ -1,0 +1,42 @@
+# One-click release: Actions ▸ Bump version ▸ Run workflow.
+# Moves CHANGELOG.md's "## Unreleased" notes under the new version, bumps Resources/Info.plist,
+# commits and tags on main, then builds and publishes the signed release (release.yml).
+name: Bump version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "patch, minor, major, or an exact version like 1.4.0"
+        required: true
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: macos-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Bump version and changelog
+        id: bump
+        run: |
+          version=$(scripts/bump-version.sh "${{ inputs.bump }}")
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release $version"
+          git tag "v$version"
+          git push origin main "v$version"
+
+  release:
+    needs: bump
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}
+    secrets: inherit
