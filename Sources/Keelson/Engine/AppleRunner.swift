@@ -41,8 +41,20 @@ final class AppleRunner: NSObject, VMRunner, VZVirtualMachineDelegate {
     }
 }
 
+/// Extra devices for `Keelson --run` (OS development); the app itself never sets these.
+struct AppleBuildExtras {
+    /// Guest serial console (virtio console port 0) wired to these handles.
+    var serial: (read: FileHandle, write: FileHandle)?
+    /// Attach the main disk as NVMe instead of virtio-blk.
+    var nvme = false
+    /// More disk images, attached as virtio-blk, USB mass storage or NVMe.
+    enum Bus { case virtio, usb, nvme }
+    var disks: [(url: URL, readOnly: Bool, bus: Bus)] = []
+}
+
 enum AppleConfigBuilder {
-    static func build(config: VMConfig, bundle: VMBundle, rawDisk: FileHandle?) throws -> VZVirtualMachineConfiguration {
+    static func build(config: VMConfig, bundle: VMBundle, rawDisk: FileHandle?,
+                      extras: AppleBuildExtras? = nil) throws -> VZVirtualMachineConfiguration {
         let c = VZVirtualMachineConfiguration()
         c.cpuCount = min(max(config.cpuCount, VZVirtualMachineConfiguration.minimumAllowedCPUCount),
                          VZVirtualMachineConfiguration.maximumAllowedCPUCount)
@@ -83,7 +95,7 @@ enum AppleConfigBuilder {
         } else {
             throw KeelsonError("This VM has no disk configured.")
         }
-        if config.guest == .windows {
+        if config.guest == .windows || extras?.nvme == true {
             // Windows ships an NVMe driver in the box; it has no virtio-blk driver.
             storage.append(VZNVMExpressControllerDeviceConfiguration(attachment: mainAttachment))
         } else {
@@ -97,7 +109,21 @@ enum AppleConfigBuilder {
             let attachment = try VZDiskImageStorageDeviceAttachment(url: url, readOnly: true)
             storage.append(VZUSBMassStorageDeviceConfiguration(attachment: attachment))
         }
+        for disk in extras?.disks ?? [] {
+            let attachment = try VZDiskImageStorageDeviceAttachment(url: disk.url, readOnly: disk.readOnly)
+            switch disk.bus {
+            case .usb: storage.append(VZUSBMassStorageDeviceConfiguration(attachment: attachment))
+            case .nvme: storage.append(VZNVMExpressControllerDeviceConfiguration(attachment: attachment))
+            case .virtio: storage.append(VZVirtioBlockDeviceConfiguration(attachment: attachment))
+            }
+        }
         c.storageDevices = storage
+        if let serial = extras?.serial {
+            let port = VZVirtioConsoleDeviceSerialPortConfiguration()
+            port.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: serial.read,
+                                                               fileHandleForWriting: serial.write)
+            c.serialPorts = [port]
+        }
 
         // Network: NAT. (Bridged networking needs an Apple-granted entitlement.)
         let net = VZVirtioNetworkDeviceConfiguration()

@@ -4,7 +4,9 @@ import SwiftUI
 enum KeelsonMain {
     static func main() {
         let args = CommandLine.arguments
-        if args.contains("--selftest") {
+        if args.contains("--run") {
+            HeadlessRun.run(args)
+        } else if args.contains("--selftest") {
             SelfTest.run()
         } else if args.contains("--catalog") || args.contains("--fetch") {
             SelfTest.runInstallerCommand(args)
